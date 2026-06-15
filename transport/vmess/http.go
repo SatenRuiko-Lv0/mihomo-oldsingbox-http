@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/textproto"
 	"net/url"
+	"strings"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/randv2"
@@ -58,10 +59,7 @@ func (hc *httpConn) Write(b []byte) (int, error) {
 		path = hc.cfg.Path[randv2.IntN(len(hc.cfg.Path))]
 	}
 
-	host := hc.cfg.Host
-	if header := hc.cfg.Headers["Host"]; len(header) != 0 {
-		host = header[randv2.IntN(len(header))]
-	}
+	host := requestHostFromHeaders(hc.cfg.Host, hc.cfg.Headers)
 
 	req := http.Request{
 		Method: hc.cfg.Method, // default is GET
@@ -71,7 +69,20 @@ func (hc *httpConn) Write(b []byte) (int, error) {
 		Body:   io.NopCloser(bytes.NewReader(b)),
 	}
 	for key, list := range hc.cfg.Headers {
+		if isHostHeader(key) {
+			continue
+		}
+		if len(list) == 0 {
+			continue
+		}
 		req.Header.Set(key, list[randv2.IntN(len(list))])
+	}
+	if req.Method == "" {
+		req.Method = http.MethodGet
+	}
+	if strings.TrimSpace(req.Host) == "" {
+		req.Host = hc.cfg.Host
+		req.URL.Host = hc.cfg.Host
 	}
 	req.ContentLength = int64(len(b))
 	if err := req.Write(hc.Conn); err != nil {

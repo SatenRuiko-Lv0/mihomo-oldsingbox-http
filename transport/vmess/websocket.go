@@ -401,14 +401,11 @@ func streamWebsocketConn(ctx context.Context, conn net.Conn, c *WebsocketConfig,
 	request.Header.Set("Connection", "Upgrade")
 	request.Header.Set("Upgrade", "websocket")
 
-	if host := request.Header.Get("Host"); host != "" {
-		// For client requests, Host optionally overrides the Host
-		// header to send. If empty, the Request.Write method uses
-		// the value of URL.Host. Host may contain an international
-		// domain name.
+	if host := requestHostFromHeaders(c.Host, request.Header); host != "" {
 		request.Host = host
+		request.URL.Host = host
 	}
-	request.Header.Del("Host")
+	deleteHostHeaders(request.Header)
 
 	var secKey string
 	if !c.V2rayHttpUpgrade {
