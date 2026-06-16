@@ -1,11 +1,18 @@
-From 6afafde69412a8e3c40651cb48c0ae6647e10cad Mon Sep 17 00:00:00 2001
+From df58705953926d0e7ed02b0453d8ee1bd5b3834e Mon Sep 17 00:00:00 2001
 From: SatenRuiko-Lv0 <pcscgxy@qq.com>
 Date: Tue, 16 Jun 2026 15:11:39 +0800
 Subject: [PATCH] Use Android-only fork workflows on release refs
 
+---
+ .github/workflows/build.yml               | 648 +++++-----------------
+ .github/workflows/test.yml                |  69 ---
+ .github/workflows/trigger-cmfa-update.yml |  31 --
+ 3 files changed, 132 insertions(+), 616 deletions(-)
+ delete mode 100644 .github/workflows/test.yml
+ delete mode 100644 .github/workflows/trigger-cmfa-update.yml
 
 diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
-index 66986089..bed1f87e 100644
+index 66986089..50b6fd23 100644
 --- a/.github/workflows/build.yml
 +++ b/.github/workflows/build.yml
 @@ -1,539 +1,155 @@
@@ -19,6 +26,15 @@ index 66986089..bed1f87e 100644
 +      channel:
 +        description: "release or alpha"
          required: true
+-  push:
+-    paths-ignore:
+-      - "docs/**"
+-      - "README.md"
+-      - ".github/ISSUE_TEMPLATE/**"
+-    branches:
+-      - Alpha
+-    tags:
+-      - "v*"
 +        default: "release"
 +        type: choice
 +        options:
@@ -30,21 +46,13 @@ index 66986089..bed1f87e 100644
 +      build_ref:
 +        description: "Git ref to check out for the build. Empty means the triggering ref."
 +        required: false
--  push:
--    paths-ignore:
--      - "docs/**"
--      - "README.md"
--      - ".github/ISSUE_TEMPLATE/**"
--    branches:
--      - Alpha
--    tags:
--      - "v*"
    pull_request:
 -    branches:
 -      - Alpha
 +
  concurrency:
-   group: "${{ github.workflow }}-${{ github.event.inputs.channel || github.ref }}-${{ github.event.inputs.build_ref || github.ref }}"
+-  group: "${{ github.workflow }}-${{ github.ref }}"
++  group: "${{ github.workflow }}-${{ github.event.inputs.channel || github.ref }}-${{ github.event.inputs.build_ref || github.ref }}"
    cancel-in-progress: true
 -  
 -env:
@@ -296,14 +304,12 @@ index 66986089..bed1f87e 100644
 -        set -xeuo pipefail
 -        sudo gem install fpm
 -        cp .github/release/.fpm_systemd .fpm
- 
+-
 -        fpm -t rpm \
 -          -v "${PackageVersion}" \
 -          -p "mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}-${VERSION}.rpm" \
 -          --architecture ${{ matrix.jobs.rpm }} \
 -          mihomo=/usr/bin/mihomo
-+permissions:
-+  contents: write
  
 -    - name: Package Pacman
 -      if: matrix.jobs.pacman != ''
@@ -312,7 +318,9 @@ index 66986089..bed1f87e 100644
 -        sudo gem install fpm
 -        sudo apt-get update && sudo apt-get install -y libarchive-tools
 -        cp .github/release/.fpm_systemd .fpm
--
++permissions:
++  contents: write
+ 
 -        fpm -t pacman \
 -          -v "${PackageVersion}" \
 -          -p "mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}-${VERSION}.pkg.tar.zst" \
@@ -431,29 +439,37 @@ index 66986089..bed1f87e 100644
 -          ref: Meta
 -          fetch-depth: '0'
 -          fetch-tags: 'true'
-+          ref: ${{ github.event.inputs.build_ref || github.ref }}
-+          fetch-depth: 0
-+          fetch-tags: true
- 
+-
 -      - name: Get tags
 -        run: |
 -          echo "CURRENTVERSION=${{ github.event.inputs.version }}" >> $GITHUB_ENV
 -          git fetch --tags
 -          echo "PREVERSION=$(git describe --tags --abbrev=0 HEAD)" >> $GITHUB_ENV
++          ref: ${{ github.event.inputs.build_ref || github.ref }}
++          fetch-depth: 0
++          fetch-tags: true
+ 
+-      - name: Force push Alpha branch to Meta
+-        run: |
+-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+-          git config --global user.name "github-actions[bot]"
+-          git fetch origin Alpha:Alpha
+-          git push origin Alpha:Meta --force
+-        env:
+-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 +      - name: Set up Go
 +        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
 +        with:
 +          go-download-base-url: "https://github.com/MetaCubeX/go/releases/download/build"
 +          go-version: ${{ env.GO_VERSION }}
  
--      - name: Force push Alpha branch to Meta
+-      - name: Tag the commit on Alpha
 +      - name: Set variables
 +        shell: bash
          run: |
--          git config --global user.email "github-actions[bot]@users.noreply.github.com"
--          git config --global user.name "github-actions[bot]"
--          git fetch origin Alpha:Alpha
--          git push origin Alpha:Meta --force
+-          git checkout Alpha 
+-          git tag ${{ github.event.inputs.version }}
+-          git push origin ${{ github.event.inputs.version }}
 +          set -euo pipefail
 +          channel="${{ github.event.inputs.channel || '' }}"
 +          input_version="${{ github.event.inputs.version || '' }}"
@@ -501,30 +517,17 @@ index 66986089..bed1f87e 100644
          env:
 -          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 -
--      - name: Tag the commit on Alpha
+-      - name: Generate release notes
 +          GOOS: android
 +          GOARCH: arm64
 +          GOARM64: v8.0
          run: |
--          git checkout Alpha 
--          git tag ${{ github.event.inputs.version }}
--          git push origin ${{ github.event.inputs.version }}
--        env:
--          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-+          go build -v -tags "with_gvisor" -trimpath -ldflags "-X 'github.com/metacubex/mihomo/constant.Version=${VERSION}' -X 'github.com/metacubex/mihomo/constant.BuildTime=${BUILDTIME}' -w -s -buildid=" -o "${ASSET}"
-+          printf '%s\n' "${VERSION}" > version.txt
-+          sha256sum "${ASSET}" version.txt > checksums.txt
- 
--      - name: Generate release notes
--        run: |
 -            cp ./.github/genReleaseNote.sh ./
 -            bash ./genReleaseNote.sh -v ${PREVERSION}...${CURRENTVERSION}
 -            rm ./genReleaseNote.sh
 -  
 -      - uses: actions/download-artifact@v8
-+      - name: Upload artifact
-+        uses: actions/upload-artifact@v7
-         with:
+-        with:
 -          path: bin/
 -          merge-multiple: true
 -  
@@ -539,7 +542,10 @@ index 66986089..bed1f87e 100644
 -          tag_name: ${{ github.event.inputs.version }}
 -          files: bin/*
 -          body_path: release.md
--
++          go build -v -tags "with_gvisor" -trimpath -ldflags "-X 'github.com/metacubex/mihomo/constant.Version=${VERSION}' -X 'github.com/metacubex/mihomo/constant.BuildTime=${BUILDTIME}' -w -s -buildid=" -o "${ASSET}"
++          printf '%s\n' "${VERSION}" > version.txt
++          sha256sum "${ASSET}" version.txt > checksums.txt
+ 
 -  Docker:
 -    if: ${{ !startsWith(github.event_name, 'pull_request') }}
 -    permissions: write-all
@@ -548,6 +554,12 @@ index 66986089..bed1f87e 100644
 -    steps:
 -      - name: Checkout repository
 -        uses: actions/checkout@v6
++      - name: Upload artifact
++        uses: actions/upload-artifact@v7
+         with:
+-          fetch-depth: 0
+-
+-      - uses: actions/download-artifact@v8
 +          name: android-arm64-v8a
 +          path: |
 +            ${{ env.ASSET }}
@@ -558,10 +570,6 @@ index 66986089..bed1f87e 100644
 +        if: ${{ github.event_name != 'pull_request' }}
 +        uses: actions/github-script@v8
          with:
--          fetch-depth: 0
--
--      - uses: actions/download-artifact@v8
--        with:
 -          path: bin/
 -          merge-multiple: true
 -
@@ -793,3 +801,6 @@ index 35fd276c..00000000
 -            -H "Accept: application/vnd.github.everest-preview+json" \
 -            -H "Authorization: token ${{ steps.generate-token.outputs.token }}" \
 -            -d '{"event_type": "core-updated"}'
+-- 
+2.54.0.windows.1
+
