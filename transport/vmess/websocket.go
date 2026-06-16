@@ -437,7 +437,11 @@ func streamWebsocketConn(ctx context.Context, conn net.Conn, c *WebsocketConfig,
 		defer done(&err)
 	}
 
-	err = request.Write(conn)
+	if c.TLS {
+		err = request.Write(conn)
+	} else {
+		err = writeWebsocketClientRequest(conn, request)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -507,6 +511,75 @@ func StreamWebsocketConn(ctx context.Context, conn net.Conn, c *WebsocketConfig)
 	}
 
 	return streamWebsocketConn(ctx, conn, c, nil)
+}
+
+func writeWebsocketClientRequest(conn net.Conn, request *http.Request) error {
+	var buffer bytes.Buffer
+	uri := request.URL.RequestURI()
+	if uri == "" {
+		uri = "/"
+	}
+	host := request.Host
+	if host == "" {
+		host = request.URL.Host
+	}
+
+	buffer.WriteString(request.Method)
+	buffer.WriteByte(' ')
+	buffer.WriteString(uri)
+	buffer.WriteString(" HTTP/1.1\r\n")
+	buffer.WriteString("Host: ")
+	buffer.WriteString(host)
+	buffer.WriteString("\r\n")
+	buffer.WriteString("Upgrade: websocket\r\n")
+	buffer.WriteString("Connection: Upgrade\r\n")
+
+	if secVersion := request.Header.Get("Sec-WebSocket-Version"); secVersion != "" {
+		buffer.WriteString("Sec-WebSocket-Version: ")
+		buffer.WriteString(secVersion)
+		buffer.WriteString("\r\n")
+	}
+	if secKey := request.Header.Get("Sec-WebSocket-Key"); secKey != "" {
+		buffer.WriteString("Sec-WebSocket-Key: ")
+		buffer.WriteString(secKey)
+		buffer.WriteString("\r\n")
+	}
+
+	userAgent := request.Header.Get("User-Agent")
+	if userAgent == "" {
+		userAgent = "Go-http-client/1.1"
+	}
+	buffer.WriteString("User-Agent: ")
+	buffer.WriteString(userAgent)
+	buffer.WriteString("\r\n")
+
+	for key, values := range request.Header {
+		if isWebsocketFixedClientHeader(key) {
+			continue
+		}
+		for _, value := range values {
+			buffer.WriteString(key)
+			buffer.WriteString(": ")
+			buffer.WriteString(value)
+			buffer.WriteString("\r\n")
+		}
+	}
+
+	buffer.WriteString("\r\n")
+	n, err := conn.Write(buffer.Bytes())
+	if err == nil && n != buffer.Len() {
+		err = io.ErrShortWrite
+	}
+	return err
+}
+
+func isWebsocketFixedClientHeader(key string) bool {
+	switch http.CanonicalHeaderKey(key) {
+	case "Host", "Connection", "Upgrade", "Sec-Websocket-Key", "Sec-Websocket-Version", "User-Agent":
+		return true
+	default:
+		return false
+	}
 }
 
 func newWebsocketConn(conn net.Conn, state ws.State) *websocketConn {
