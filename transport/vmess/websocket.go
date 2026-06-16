@@ -545,14 +545,6 @@ func writeWebsocketClientRequest(conn net.Conn, request *http.Request) error {
 		buffer.WriteString("\r\n")
 	}
 
-	userAgent := request.Header.Get("User-Agent")
-	if userAgent == "" {
-		userAgent = "Go-http-client/1.1"
-	}
-	buffer.WriteString("User-Agent: ")
-	buffer.WriteString(userAgent)
-	buffer.WriteString("\r\n")
-
 	for key, values := range request.Header {
 		if isWebsocketFixedClientHeader(key) {
 			continue
@@ -575,7 +567,7 @@ func writeWebsocketClientRequest(conn net.Conn, request *http.Request) error {
 
 func isWebsocketFixedClientHeader(key string) bool {
 	switch http.CanonicalHeaderKey(key) {
-	case "Host", "Connection", "Upgrade", "Sec-Websocket-Key", "Sec-Websocket-Version", "User-Agent":
+	case "Host", "Connection", "Upgrade", "Sec-Websocket-Key", "Sec-Websocket-Version":
 		return true
 	default:
 		return false
