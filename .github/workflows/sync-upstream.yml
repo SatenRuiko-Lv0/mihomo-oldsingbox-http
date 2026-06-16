@@ -1,0 +1,152 @@
+name: Sync Upstream
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "release or alpha"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - release
+          - alpha
+  schedule:
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-upstream-${{ github.event.inputs.channel || 'auto' }}
+  cancel-in-progress: false
+
+jobs:
+  sync-release:
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.channel == 'release' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure git
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+      - name: Add upstream
+        run: |
+          git remote add upstream https://github.com/MetaCubeX/mihomo.git || git remote set-url upstream https://github.com/MetaCubeX/mihomo.git
+          git fetch upstream --tags --prune
+
+      - name: Sync latest release
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          patch_dir="$(mktemp -d)"
+          cp patches/*.patch "$patch_dir"/
+
+          latest="$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r '.tag_name')"
+          if [[ -z "$latest" || "$latest" == "null" ]]; then
+            echo "No upstream latest release found" >&2
+            exit 1
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${latest}" >/dev/null 2>&1; then
+            echo "Latest release ${latest} already exists in fork"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "version=${latest}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git switch -C "release/${latest}" "${latest}"
+          git am "$patch_dir"/*.patch || {
+            echo "Compatibility patch replay failed on ${latest}" >&2
+            exit 1
+          }
+          git push origin "HEAD:release/${latest}" --force
+          git tag -f "${latest}"
+          git push origin "refs/tags/${latest}" --force
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "version=${latest}" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger release build
+        if: ${{ steps.sync.outputs.changed == 'true' }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build.yml',
+              ref: '${{ steps.sync.outputs.version }}',
+              inputs: {
+                channel: 'release',
+                version: '${{ steps.sync.outputs.version }}',
+              },
+            });
+
+  sync-alpha:
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.channel == 'alpha' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure git
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+      - name: Add upstream
+        run: |
+          git remote add upstream https://github.com/MetaCubeX/mihomo.git || git remote set-url upstream https://github.com/MetaCubeX/mihomo.git
+          git fetch upstream Alpha --tags --prune
+
+      - name: Sync Alpha
+        id: sync
+        run: |
+          set -euo pipefail
+          patch_dir="$(mktemp -d)"
+          cp patches/*.patch "$patch_dir"/
+
+          upstream_alpha="$(git rev-parse upstream/Alpha)"
+          current_alpha="$(git ls-remote origin refs/heads/Alpha | awk '{print $1}')"
+
+          git switch -C Alpha upstream/Alpha
+          git am "$patch_dir"/*.patch || {
+            echo "Compatibility patch replay failed on Alpha" >&2
+            exit 1
+          }
+
+          patched_alpha="$(git rev-parse HEAD)"
+          if [[ "$patched_alpha" == "$current_alpha" ]]; then
+            echo "Fork Alpha is already current"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git push origin HEAD:Alpha --force
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger alpha build
+        if: ${{ steps.sync.outputs.changed == 'true' }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'build.yml',
+              ref: 'Alpha',
+              inputs: {
+                channel: 'alpha',
+              },
+            });
