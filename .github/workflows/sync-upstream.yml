@@ -40,7 +40,7 @@ jobs:
       - name: Add upstream
         run: |
           git remote add upstream https://github.com/MetaCubeX/mihomo.git || git remote set-url upstream https://github.com/MetaCubeX/mihomo.git
-          git fetch upstream --tags --prune
+          git fetch upstream Meta --tags --prune
 
       - name: Sync latest release
         id: sync
@@ -56,6 +56,10 @@ jobs:
             echo "No upstream latest release found" >&2
             exit 1
           fi
+          git merge-base --is-ancestor "${latest}" upstream/Meta || {
+            echo "Upstream latest release ${latest} is not on the official Meta branch" >&2
+            exit 1
+          }
 
           if git ls-remote --exit-code --tags origin "refs/tags/${latest}" >/dev/null 2>&1; then
             echo "Latest release ${latest} already exists in fork"
