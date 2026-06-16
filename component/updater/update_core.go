@@ -24,16 +24,15 @@ import (
 )
 
 const (
-	baseReleaseURL    = "https://github.com/MetaCubeX/mihomo/releases/latest/download/"
-	versionReleaseURL = "https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt"
+	baseReleaseURL    = "https://github.com/SatenRuiko-Lv0/mihomo/releases/latest/download/"
+	versionReleaseURL = "https://github.com/SatenRuiko-Lv0/mihomo/releases/latest/download/version.txt"
 
-	baseAlphaURL    = "https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/"
-	versionAlphaURL = "https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/version.txt"
+	baseAlphaURL    = "https://github.com/SatenRuiko-Lv0/mihomo/releases/download/Prerelease-Alpha/"
+	versionAlphaURL = "https://github.com/SatenRuiko-Lv0/mihomo/releases/download/Prerelease-Alpha/version.txt"
 
 	// MaxPackageFileSize is a maximum package file length in bytes. The largest
-	// package whose size is limited by this constant currently has the size of
-	// approximately 32 MiB.
-	MaxPackageFileSize = 32 * 1024 * 1024
+	// direct Android arm64-v8 package is currently about 48 MiB.
+	MaxPackageFileSize = 96 * 1024 * 1024
 )
 
 const (
@@ -122,11 +121,17 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 
 	// ---- prepare ----
 	mihomoBaseName := u.CoreBaseName()
+	updateExeName := mihomoBaseName
+	if runtime.GOOS == "windows" {
+		updateExeName = updateExeName + ".exe"
+	}
+	log.Infoln("updateExeName: %s", updateExeName)
+
 	packageName := mihomoBaseName + "-" + latestVersion
 	if runtime.GOOS == "windows" {
 		packageName = packageName + ".zip"
 	} else {
-		packageName = packageName + ".gz"
+		packageName = packageName + ".bin"
 	}
 	packageURL := baseURL + packageName
 	log.Infoln("updater: updating using url: %s", packageURL)
@@ -137,11 +142,6 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 	packagePath := filepath.Join(updateDir, packageName)
 	//log.Infoln(packagePath)
 
-	updateExeName := mihomoBaseName
-	if runtime.GOOS == "windows" {
-		updateExeName = updateExeName + ".exe"
-	}
-	log.Infoln("updateExeName: %s", updateExeName)
 	updateExePath := filepath.Join(updateDir, updateExeName)
 	backupExePath := filepath.Join(backupDir, filepath.Base(currentExePath))
 
@@ -152,7 +152,7 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 		return fmt.Errorf("downloading: %w", err)
 	}
 
-	err = u.unpack(updateDir, packagePath, info.Mode())
+	err = u.unpack(updateDir, packagePath, updateExeName, info.Mode())
 	if err != nil {
 		return fmt.Errorf("unpacking: %w", err)
 	}
@@ -245,8 +245,8 @@ func (u *CoreUpdater) download(updateDir, packagePath, packageURL string) (err e
 	return nil
 }
 
-// unpack extracts the files from the downloaded archive.
-func (u *CoreUpdater) unpack(updateDir, packagePath string, fileMode os.FileMode) error {
+// unpack extracts or stages the downloaded package.
+func (u *CoreUpdater) unpack(updateDir, packagePath, outputName string, fileMode os.FileMode) error {
 	log.Infoln("updater: unpacking package")
 	if strings.HasSuffix(packagePath, ".zip") {
 		_, err := u.zipFileUnpack(packagePath, updateDir, fileMode)
@@ -260,8 +260,48 @@ func (u *CoreUpdater) unpack(updateDir, packagePath string, fileMode os.FileMode
 			return fmt.Errorf(".gz unpack failed: %w", err)
 		}
 
+	} else if strings.HasSuffix(packagePath, ".bin") {
+		err := u.binFileUnpack(packagePath, filepath.Join(updateDir, outputName), fileMode)
+		if err != nil {
+			return fmt.Errorf(".bin stage failed: %w", err)
+		}
+
 	} else {
 		return fmt.Errorf("unknown package extension")
+	}
+
+	return nil
+}
+
+// binFileUnpack stages a direct binary package to the executable name expected by the updater.
+func (u *CoreUpdater) binFileUnpack(binfile, outputName string, fileMode os.FileMode) (err error) {
+	rc, err := os.Open(binfile)
+	if err != nil {
+		return fmt.Errorf("os.Open(): %w", err)
+	}
+
+	defer func() {
+		closeErr := rc.Close()
+		if closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	wc, err := os.OpenFile(outputName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fileMode)
+	if err != nil {
+		return fmt.Errorf("os.OpenFile(%s): %w", outputName, err)
+	}
+
+	defer func() {
+		closeErr := wc.Close()
+		if closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+
+	_, err = io.Copy(wc, rc)
+	if err != nil {
+		return fmt.Errorf("io.Copy(): %w", err)
 	}
 
 	return nil
