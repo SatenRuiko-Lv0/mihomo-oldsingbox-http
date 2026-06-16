@@ -84,10 +84,11 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'build.yml',
-              ref: '${{ steps.sync.outputs.version }}',
+              ref: 'main',
               inputs: {
                 channel: 'release',
                 version: '${{ steps.sync.outputs.version }}',
+                build_ref: '${{ steps.sync.outputs.version }}',
               },
             });
 
@@ -145,8 +146,9 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'build.yml',
-              ref: 'Alpha',
+              ref: 'main',
               inputs: {
                 channel: 'alpha',
+                build_ref: 'Alpha',
               },
             });
