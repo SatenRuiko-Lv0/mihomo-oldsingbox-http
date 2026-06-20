@@ -6,9 +6,8 @@ import (
 	"io"
 	"net"
 	"net/textproto"
-	"net/url"
+	"strings"
 
-	"github.com/metacubex/http"
 	"github.com/metacubex/randv2"
 )
 
@@ -58,25 +57,12 @@ func (hc *httpConn) Write(b []byte) (int, error) {
 		path = hc.cfg.Path[randv2.IntN(len(hc.cfg.Path))]
 	}
 
-	host := hc.cfg.Host
-	if header := hc.cfg.Headers["Host"]; len(header) != 0 {
-		host = header[randv2.IntN(len(header))]
+	method := hc.cfg.Method
+	if method == "" {
+		method = "PUT"
 	}
-
-	req := http.Request{
-		Method: hc.cfg.Method, // default is GET
-		Host:   host,
-		URL:    &url.URL{Scheme: "http", Host: host, Path: path},
-		Header: make(http.Header),
-		Body:   io.NopCloser(bytes.NewReader(b)),
-	}
-	for key, list := range hc.cfg.Headers {
-		if len(list) > 0 {
-			req.Header.Set(key, list[randv2.IntN(len(list))])
-		}
-	}
-	req.ContentLength = int64(len(b))
-	if err := req.Write(hc.Conn); err != nil {
+	host := pickHTTPHeader(hc.cfg.Host, hc.cfg.Headers, "Host")
+	if err := writeHTTPClientRequest(hc.Conn, method, path, host, hc.cfg.Headers, b); err != nil {
 		return 0, err
 	}
 	hc.whandshake = true
@@ -92,4 +78,49 @@ func StreamHTTPConn(conn net.Conn, cfg *HTTPConfig) net.Conn {
 		Conn: conn,
 		cfg:  cfg,
 	}
+}
+
+func writeHTTPClientRequest(conn net.Conn, method string, path string, host string, headers map[string][]string, payload []byte) error {
+	if path == "" {
+		path = "/"
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	var buffer bytes.Buffer
+	buffer.WriteString(method)
+	buffer.WriteByte(' ')
+	buffer.WriteString(path)
+	buffer.WriteString(" HTTP/1.1\r\n")
+	buffer.WriteString("Host: ")
+	buffer.WriteString(host)
+	buffer.WriteString("\r\n")
+
+	for key, values := range headers {
+		if strings.EqualFold(key, "Host") || len(values) == 0 {
+			continue
+		}
+		buffer.WriteString(key)
+		buffer.WriteString(": ")
+		buffer.WriteString(values[randv2.IntN(len(values))])
+		buffer.WriteString("\r\n")
+	}
+
+	buffer.WriteString("\r\n")
+	buffer.Write(payload)
+	n, err := conn.Write(buffer.Bytes())
+	if err == nil && n != buffer.Len() {
+		err = io.ErrShortWrite
+	}
+	return err
+}
+
+func pickHTTPHeader(fallback string, headers map[string][]string, name string) string {
+	for key, values := range headers {
+		if strings.EqualFold(key, name) && len(values) > 0 {
+			return values[randv2.IntN(len(values))]
+		}
+	}
+	return fallback
 }
